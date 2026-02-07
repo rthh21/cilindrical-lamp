@@ -1,93 +1,71 @@
-# Project: Cylindrical LED Matrix Lamp
+### Smart LED Matrix Lamp (Andrei's Lamp)
 
-## 1. General Description
+#### Task Requirements
 
-In this project I'll be creating a *cylindrical rgb lamp* from zero. Using my prior skills, I will 3D model the case, program the ESP-32 and solder the WS2812 led strip. For diffusion I will be using a custom Plexiglass outer shell.
+The objective is to design and implement an advanced IoT lighting system based on a high-density LED matrix (22x13), controlled via a dual-interface system: a native Apple HomeKit integration for seamless smart home automation and a custom-built Web Interface for more control.
 
-Unlike standard lamps, this device is an IoT node powered by an **ESP32 microcontroller**. It hosts a local web server, allowing users to control it via a custom web app.
+The software architecture must bridge high-speed real-time rendering with asynchronous network communication. Key requirements include implementing a coordinate mapping algorithm for a manually soldered Zig-Zag led strips, a dynamic "Pixel Grouping" system allowing users to define and control arbitrary clusters of LEDs, and a suite of generative algorithms (Fire, Fluid Dynamics, Perlin Noise) running smoothly on the ESP32's dual-core architecture. The system requires non-volatile memory management for schedules and state persistence, along with a responsive UI stored in PROGMEM.
 
-**Key Features:**
+### Implementation
 
-* **Web Control:** Adjust color, brightness, effects and modify other settings. 
-* **Scheduling:** User-configurable ON/OFF timers based on NTP (Network Time Protocol).
-* **Dynamic Effects:** Pre-programmed animations (Rainbow, Fire, Breathe).
-* **Custom Matrix Creator:** A pixel-art style interface on the web app allowing users to draw custom static or add dynamic effects patterns on the cylinder.
-* **Automatic Brightness** The lamp can change its brightness based on the ambient light.
+#### 1. Components
 
----
+For this project, I utilized:
 
-## 2. Bill of Materials (BOM)
+* **1x ESP32 Development Board** (Dual-core Wi-Fi SoC)
+* **286x WS2812B Addressable LEDs** (High-density strips cut to size)
+* **1x USB-C Breakout Board** (Power delivery)
+* **1x 100µF Capacitor** (Power smoothing/Decoupling)
+* **Power Supply:** 5V High Amperage Source (Calculated for ~2.5A limit in software)
+* **Wiring & Enclosure:** Custom PLA 3D printed case (details in the Setup section).
 
-- 1x **ESP32-WROOM-32** (Microcontroller & Wi-Fi Server)
-- 1x **5m WS2812 Addressable LED Strip** (Light and custom effects) 
-- 1x **Plexiglass sheet** (diffusion layer/outer shell)
-- 2x **3D printed pieces** (lamp construction)
-- 1x **USB-C Breakout Board** (power delivery)
-- 1x **Logic Level Shifter** (used for stepping ESP32 3.3v data to 5v for the LED Strip)
-- 1x **1000µF capacitor** (Power smoothing for LEDs)
-- Consumable **Wires/Solder** (connections) 
+#### 2. Implementation
 
----
+##### Hardware:
 
-## 3. Tutorial Source
+The core of the visual display is a custom-fabricated matrix consisting of **22 vertical columns**, each containing **13 LEDs**. Unlike commercially available flexible matrices, this was constructed by manually soldering individual LED strip segments.
 
-For this project I am not following a specific tutorial. This lamp is built from the ground up using knowledge accumulated 
-throughout all of the university years. The outer shell will be modeled by me in *Fusion 360* and 3D printed. I will manually write the software to handle my specific case and requirements for the cylindrical mapping (1D LED Strip to 2D matrix). The connections will be soldered rather than using a pre-made kit.
+To optimize the wiring path and reduce cable clutter, I utilized a **Zig-Zag (Serpentine) Topology**. The data signal flows alternatively: Upwards on even columns and Downwards on odd columns (or vice-versa depending on the start point). This physical layout necessitates a software-side coordinate remapping system to treat the array as a logical Cartesian grid (X, Y).
 
----
+Power distribution is managed via a **USB-C Breakout board**. To prevent voltage sags during high-brightness transients (like full white flashes), a **100µF capacitor** is placed in parallel across the power rails near the ESP32 and LED injection point. The data signal is fed into the ESP32's **GPIO 4**.
 
-## 4. Technical Analysis
+##### Software:
 
-### Q1 - What is the system boundary?
+The software is built upon a hybrid architecture integrating **FastLED** for rendering, **HomeSpan** for Apple HomeKit certification-less integration, and a native asynchronous **WebServer** for the GUI.
 
-The system boundary includes everything from the physical lamp hardware to the hosted software interface.
+**Technical & Architectural Overview**
+I implemented a modular state-machine approach. The main loop orchestrates three critical non-blocking tasks: Network Polling (HomeKit/Web), State Management (Effect logic), and Frame Rendering.
 
-* **Inputs:** USB-C Power (5V), User commands via Wi-Fi, Time data (NTP), photoresistor.
-* **Outputs:** Light Effects, Web Interface for mobile (maybe pc) (UI), *maybe Apple homekit implementation*.
-* **Excluded:** The user's smartphone hardware and the wall adapter are external actors; the system boundary ends at the USB port and the ESP-32 Wi-Fi antenna.
+**1. The Render Engine (The View)**
+At the lowest level, the `FastLED` library drives the WS2812B protocol. However, drawing directly to the strip index `leds[i]` is unintuitive due to the Zig-Zag wiring. I implemented a hardware abstraction layer via the **`XY(x, y)`** function. This function translates logical Cartesian coordinates (0..21, 0..12) into the physical 1D index of the LED strip using bitwise operations to detect column parity (`x & 1`).
 
-### Q2 - Where does intelligence live?
+The rendering pipeline supports multiple generative modes:
 
-The intelligence lives entirely **locally on the ESP32**.
+* **Particle Systems:** The **Fire Effect** uses a cooling/sparking heat map algorithm (`qsub8`, `random8`) simulated on a virtual grid and mapped to the LEDs.
+* **Fluid Dynamics:** The **Liquid** and **Lava** effects utilize 3D Simplex Noise (`inoise8`) to generate organic, flowing textures that evolve over time (Z-axis offset).
+* **Trigonometric Patterns:** The **Neon Wave** and **Vortex** modes use `sin8` and polar coordinate math to create rotating gradients and oscillating interference patterns.
 
-* It does not rely on a cloud service (like AWS or Blynk) for logic.
-* The ESP32 handles the web server hosting, the mathematical mapping of pixels to the cylinder and the lighting/effects, and the real-time generation of PWM signals for the LEDs.
+**2. State Management & Connectivity (The Controller)**
+The system features a dual-control scheme:
 
-### Q3 - What is the hardest technical problem?
+* **Apple HomeKit (HomeSpan):** I implemented a `LampAccessory` class inheriting from `Service::LightBulb`. This exposes the standard Hue/Saturation/Brightness (HSV) characteristics to iOS devices. When a user creates a scene in the Apple Home app, the `update()` override intercepts the payload, converts the HSB color space to RGB, and overrides the current animation mode to a solid color.
+* **Web Dashboard (The Interface):** For advanced control, I embedded a complete Single Page Application (SPA) within the ESP32's flash memory (`PROGMEM`). The UI connects to the backend via REST API endpoints (e.g., `/mode?m=1`, `/set?r=255...`).
 
-The project presents three distinct technical hurdles:
+**3. Advanced Feature: Dynamic Grouping**
+A unique feature of this architecture is the **Pixel Grouping System**. To allow users to highlight specific areas of the lamp (e.g., drawing a shape), I implemented a `ledGroupMap[NUM_LEDS]` array.
+The Web UI features a JavaScript-generated grid allowing users to "paint" specific pixels. When saved, this bitmask is sent to the ESP32, which assigns a Group ID to those physical indices. The rendering loop checks `currentMode == 6`, iterates through the map, and applies distinct effects (Static, Breath, Rainbow) solely to the user-defined clusters, effectively allowing the matrix to act as a canvas.
 
-1. **Cylindrical Matrix Mapping:** converting a linear strip of LEDs into a 2D matrix and then wrapping that logically around a cylinder. This requires complex index calculation.
-2. **Power & Logic Levels:** The WS2812B LEDs require 5V logic for reliable data transmission, while the ESP32 outputs 3.3V. Designing a stable circuit that bridges this gap while handling the high current draw of the LEDs is required.
-3. **Physical Design:** Modeling a 3D-printable structure that holds the circuits and the LEDs firmly while allowing the plexiglass to diffuse light evenly without hotspots.
+**4. System Utilities & Persistence**
 
-### Q4 - What is the minimum demo?
+* **NTP Synchronization:** The system connects to `pool.ntp.org` to retrieve precise local time, enabling the **Scheduler** feature (auto-turn off at specific hours).
+* **Non-Blocking Timers:** Instead of `delay()`, the code uses `millis()` deltas for animation timing and `EVERY_N_MILLISECONDS` macros to maintain a consistent framerate (~30 FPS) while keeping the web server responsive.
+* **Safety:** A software power limiter is implemented via `FastLED.setMaxPowerInVoltsAndMilliamps(5, 2500)` to ensure the current draw never exceeds the USB-C capabilities, preventing brownouts.
 
-A successful minimum demo consists of:
+### 3. Setup & Video
 
-1. Powering the system via USB-C.
-2. The device connecting to local Wi-Fi for simple web controls.
-3. Changing the color of the lamp successfully from the phone.
-4. The system must be capable of continuous operation for a minimum of 30 minutes.
+<div align = "center">
+<img src="LampProject/matrix_soldering.jpeg" alt="Matrix Construction" width="300">
+<img src="LampProject/final_case.jpeg" alt="Final Assembly" width="300">
+</div>
 
-### Q5 - Why is this not just a tutorial?
-
-While basic tutorials exist for driving LED strips, this project represents a complex system integration challenge rather than a simple reproduction:
-
-- Custom Full-Stack Firmware: Unlike other projects, this firmware integrates a non-blocking asynchronous web server, NTP time synchronization, and sensor-based logic (automatic brightness via photoresistor). It also handles the custom mathematical translation required to map 2D drawing tools to a 3D cylindrical surface for lighting/custom effects.
-
-- Original Mechanical Design: I am not printing a downloaded model, the case is being modeled from scratch in *Fusion 360* to specifically address the optical challenges of diffusing LEDs through plexiglass without creating hotspots.
-
-- Advanced IoT Features: The project aims to go beyond simple remote control by exploring integration with ecosystem standards like Apple HomeKit. (if time allows)
-    
-### Q6 - Do you need an ESP32?
-
-**Yes:**
-I require an ESP32 (purchased by me) because the project relies heavily on **Wi-Fi capabilities** to host the web server and better computation (also the small form-factor helps). A standard Arduino Uno would not be enought.
-
----
-
-Prototype:
-<p align="center">
-  <img src="prototip.jpeg" alt="Prototip Lampa" width="500">
-</p>
+*Note: The physical assembly involves a complex 3D printed housing designed to diffuse the light and manage heat dissipation. The 22 distinct strips were aligned using a printed jig to ensure perfect grid alignment.*
