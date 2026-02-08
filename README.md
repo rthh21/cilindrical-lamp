@@ -84,8 +84,6 @@ The Web UI features a JavaScript-generated grid allowing users to "paint" specif
 
 Video: https://youtu.be/seQi7z0X9K8
 
-![Internal Assembly & Wiring](prototip.jpeg)
-
 **Final Results:**
 
 | | | |
